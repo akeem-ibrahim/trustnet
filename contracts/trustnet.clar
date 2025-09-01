@@ -285,3 +285,95 @@
     false
   )
 )
+
+;; Calculate trust tier based on current score with hysteresis
+(define-private (compute-trust-tier (trust-score uint))
+  (if (>= trust-score u8000) u5      ;; Elite tier (80%+)
+    (if (>= trust-score u6000) u4    ;; High tier (60-80%)
+      (if (>= trust-score u4000) u3  ;; Medium tier (40-60%)
+        (if (>= trust-score u2000) u2 ;; Basic tier (20-40%)
+          (if (>= trust-score u500) u1 ;; Novice tier (5-20%)
+            u0                        ;; Unrated tier (<5%)
+          )
+        )
+      )
+    )
+  )
+)
+
+;; Record trust coefficient changes with enhanced metadata
+(define-private (record-trust-transition
+  (identity principal)
+  (operation-name (string-ascii 48))
+  (previous-score uint)
+  (updated-score uint)
+  (gas-cost uint)
+)
+  (let ((transition-id (+ stacks-block-height (get verified-operations (default-to {
+      unique-handle: "",
+      trust-coefficient: u0,
+      genesis-block: u0,
+      last-interaction: u0,
+      entropy-checkpoint: u0,
+      verified-operations: u0,
+      active-status: false,
+      trust-tier: u0
+    } (map-get? trust-registry {identity: identity}))))))
+    (map-set trust-ledger
+      {identity: identity, sequence-id: transition-id}
+      {
+        operation-executed: operation-name,
+        trust-before: previous-score,
+        trust-after: updated-score,
+        bitcoin-anchor: burn-block-height,
+        stacks-height: stacks-block-height,
+        gas-consumed: gas-cost,
+        validator-signature: none
+      }
+    )
+    
+    ;; Update global trust distribution analytics
+    (var-set global-trust-distribution
+      (+ (var-get global-trust-distribution)
+         (if (> updated-score previous-score)
+           (- updated-score previous-score)
+           u0)))
+    
+    (print {
+      trust-event: "coefficient-updated",
+      identity: identity,
+      operation: operation-name,
+      score-delta: (if (>= updated-score previous-score)
+                    (- updated-score previous-score)
+                    (- previous-score updated-score)),
+      new-total: updated-score,
+      trust-tier: (compute-trust-tier updated-score)
+    })
+  )
+)
+
+;; Retrieve operation multiplier with safety fallback
+(define-private (get-operation-trust-multiplier (operation-type (string-ascii 48)))
+  (default-to u0
+    (get trust-multiplier
+      (map-get? trust-operations {operation-type: operation-type})
+    )
+  )
+)
+
+;; Verify operation availability and tier requirements
+(define-private (is-operation-accessible (operation-type (string-ascii 48)) (identity-tier uint))
+  (match (map-get? trust-operations {operation-type: operation-type})
+    operation-config
+      (and
+        (get operational operation-config)
+        (>= identity-tier (get minimum-tier-requirement operation-config))
+      )
+    false
+  )
+)
+
+;; Determine if entropy decay should be applied based on cycle completion
+(define-private (requires-entropy-decay (last-checkpoint uint))
+  (>= (- stacks-block-height last-checkpoint) (var-get decay-cycle-duration))
+)
