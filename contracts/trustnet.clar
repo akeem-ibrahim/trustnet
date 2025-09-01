@@ -592,3 +592,117 @@
     )
   )
 )
+
+;; Public interface for manual entropy decay application
+(define-public (trigger-entropy-decay)
+  (let
+    (
+      (identity tx-sender)
+      (registry-entry
+        (unwrap!
+          (map-get? trust-registry {identity: identity})
+          ERR_IDENTITY_UNKNOWN
+        )
+      )
+    )
+    (begin
+      (asserts! (var-get protocol-operational) ERR_PROTOCOL_OFFLINE)
+      (asserts! (get active-status registry-entry) ERR_UNAUTHORIZED)
+      (asserts! (requires-entropy-decay (get entropy-checkpoint registry-entry)) ERR_MALFORMED_DATA)
+      
+      (execute-entropy-decay-internal identity)
+      
+      (let ((updated-registry (unwrap! (map-get? trust-registry {identity: identity}) ERR_IDENTITY_UNKNOWN)))
+        (ok (get trust-coefficient updated-registry))
+      )
+    )
+  )
+)
+
+;;                       CROSS-ECOSYSTEM INTEGRATION
+
+;; Grant ecosystem access credential with advanced validation
+(define-public (grant-ecosystem-credential
+  (ecosystem (string-ascii 32))
+  (trust-threshold uint)
+  (validity-duration uint)
+  (privilege-tier uint)
+)
+  (let
+    (
+      (identity tx-sender)
+      (registry-entry (unwrap! (map-get? trust-registry {identity: identity}) ERR_IDENTITY_UNKNOWN))
+      (current-trust (get trust-coefficient registry-entry))
+      (expiration-height (+ stacks-block-height validity-duration))
+    )
+    (begin
+      (asserts! (var-get protocol-operational) ERR_PROTOCOL_OFFLINE)
+      (asserts! (get active-status registry-entry) ERR_UNAUTHORIZED)
+      (asserts! (> (len ecosystem) u3) ERR_MALFORMED_DATA)
+      (asserts! (and (> validity-duration u0) (<= validity-duration u1051200)) ERR_MALFORMED_DATA) ;; Max ~2 years
+      (asserts! (>= current-trust trust-threshold) ERR_TRUST_INSUFFICIENT)
+      (asserts! (<= trust-threshold MAX_TRUST_SCORE) ERR_MALFORMED_DATA)
+      (asserts! (<= privilege-tier u5) ERR_MALFORMED_DATA)
+      
+      (map-set ecosystem-credentials
+        {ecosystem: ecosystem, identity: identity}
+        {
+          minimum-trust-threshold: trust-threshold,
+          credential-issued: stacks-block-height,
+          credential-expires: expiration-height,
+          privilege-level: privilege-tier,
+          revocation-flag: false
+        }
+      )
+      
+      (print {
+        trust-event: "credential-granted",
+        ecosystem: ecosystem,
+        identity: identity,
+        trust-threshold: trust-threshold,
+        privilege-level: privilege-tier,
+        expires-at: expiration-height,
+        bitcoin-anchor: burn-block-height
+      })
+      
+      (ok true)
+    )
+  )
+)
+
+;; Revoke ecosystem credential with audit trail
+(define-public (revoke-ecosystem-credential (ecosystem (string-ascii 32)) (target-identity principal))
+  (let
+    (
+      (existing-credential
+        (unwrap!
+          (map-get? ecosystem-credentials {ecosystem: ecosystem, identity: target-identity})
+          ERR_OPERATION_UNKNOWN
+        )
+      )
+    )
+    (begin
+      (asserts! (or
+                  (is-eq tx-sender (var-get governance-authority))
+                  (is-eq tx-sender target-identity))
+                ERR_UNAUTHORIZED)
+      
+      (map-set ecosystem-credentials
+        {ecosystem: ecosystem, identity: target-identity}
+        (merge existing-credential {
+          revocation-flag: true
+        })
+      )
+      
+      (print {
+        trust-event: "credential-revoked",
+        ecosystem: ecosystem,
+        identity: target-identity,
+        revoked-by: tx-sender,
+        timestamp: stacks-block-height
+      })
+      
+      (ok true)
+    )
+  )
+)
