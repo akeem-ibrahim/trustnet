@@ -706,3 +706,90 @@
     )
   )
 )
+
+;;                            QUERY INTERFACE
+
+;; Retrieve current trust coefficient for identity
+(define-read-only (get-trust-coefficient (identity principal))
+  (match (map-get? trust-registry {identity: identity})
+    registry-entry (some (get trust-coefficient registry-entry))
+    none
+  )
+)
+
+;; Get comprehensive trust profile with all metadata
+(define-read-only (get-trust-profile (identity principal))
+  (map-get? trust-registry {identity: identity})
+)
+
+;; Verify trust threshold compliance with detailed response
+(define-read-only (verify-trust-threshold
+  (identity principal)
+  (required-threshold uint)
+)
+  (match (map-get? trust-registry {identity: identity})
+    registry-entry
+      (let
+        (
+          (current-trust (get trust-coefficient registry-entry))
+          (threshold-met (and
+                          (get active-status registry-entry)
+                          (>= current-trust required-threshold)))
+          (trust-difference
+            (if (>= current-trust required-threshold)
+              (- current-trust required-threshold)
+              (- required-threshold current-trust)))
+        )
+        (some {
+          verified: threshold-met,
+          current-trust: current-trust,
+          trust-tier: (get trust-tier registry-entry),
+          threshold-met: required-threshold,
+          trust-difference: trust-difference,
+          active-status: (get active-status registry-entry)
+        })
+      )
+    none
+  )
+)
+
+;; Check ecosystem credential validity and access permissions
+(define-read-only (verify-ecosystem-access
+  (ecosystem (string-ascii 32))
+  (identity principal)
+)
+  (match (map-get? ecosystem-credentials {ecosystem: ecosystem, identity: identity})
+    credential
+      (let
+        (
+          (is-valid (and
+                      (not (get revocation-flag credential))
+                      (< stacks-block-height (get credential-expires credential))))
+        )
+        (some {
+          access-granted: is-valid,
+          privilege-level: (get privilege-level credential),
+          expires-at: (get credential-expires credential),
+          trust-threshold: (get minimum-trust-threshold credential),
+          revoked: (get revocation-flag credential),
+          current-height: stacks-block-height
+        })
+      )
+    none
+  )
+)
+
+;; Retrieve trust operation configuration details
+(define-read-only (get-operation-details (operation-type (string-ascii 48)))
+  (map-get? trust-operations {operation-type: operation-type})
+)
+
+;; Get trust transition history for specific identity
+(define-read-only (get-trust-history (identity principal) (sequence-id uint))
+  (map-get? trust-ledger {identity: identity, sequence-id: sequence-id})
+)
+
+;; Retrieve protocol analytics and metrics
+(define-read-only (get-protocol-analytics (metric-name (string-ascii 32)))
+  (map-get? trust-analytics {metric-name: metric-name})
+)
