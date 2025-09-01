@@ -184,3 +184,104 @@
     (ok true)
   )
 )
+
+;;                       TRUST OPERATION MANAGEMENT
+
+;; Register new trust-earning operation with comprehensive validation
+(define-public (register-trust-operation
+  (operation-type (string-ascii 48))
+  (multiplier uint)
+  (description (string-ascii 120))
+  (tier-requirement uint)
+  (daily-limit uint)
+)
+  (begin
+    (asserts! (is-eq tx-sender (var-get governance-authority)) ERR_GOVERNANCE_LOCK)
+    (asserts! (> (len operation-type) u2) ERR_MALFORMED_DATA)
+    (asserts! (> (len description) u10) ERR_MALFORMED_DATA)
+    (asserts! (is-none (map-get? trust-operations {operation-type: operation-type})) ERR_OPERATION_EXISTS)
+    (asserts! (and (>= multiplier u1) (<= multiplier u500)) ERR_MALFORMED_DATA)
+    (asserts! (<= tier-requirement u5) ERR_MALFORMED_DATA)
+    (asserts! (and (>= daily-limit u1) (<= daily-limit u100)) ERR_MALFORMED_DATA)
+    
+    (map-set trust-operations
+      {operation-type: operation-type}
+      {
+        trust-multiplier: multiplier,
+        operation-description: description,
+        minimum-tier-requirement: tier-requirement,
+        maximum-daily-executions: daily-limit,
+        operational: true
+      }
+    )
+    
+    (print {
+      governance-event: "operation-registered",
+      operation-type: operation-type,
+      trust-multiplier: multiplier,
+      tier-requirement: tier-requirement
+    })
+    (ok true)
+  )
+)
+
+;; Modify existing trust operation with enhanced parameter validation
+(define-public (modify-trust-operation
+  (operation-type (string-ascii 48))
+  (multiplier uint)
+  (description (string-ascii 120))
+  (tier-requirement uint)
+  (daily-limit uint)
+  (operational bool)
+)
+  (let
+    (
+      (existing-operation
+        (unwrap!
+          (map-get? trust-operations {operation-type: operation-type})
+          ERR_OPERATION_UNKNOWN
+        )
+      )
+    )
+    (begin
+      (asserts! (is-eq tx-sender (var-get governance-authority)) ERR_GOVERNANCE_LOCK)
+      (asserts! (> (len description) u10) ERR_MALFORMED_DATA)
+      (asserts! (and (>= multiplier u1) (<= multiplier u500)) ERR_MALFORMED_DATA)
+      (asserts! (<= tier-requirement u5) ERR_MALFORMED_DATA)
+      (asserts! (and (>= daily-limit u1) (<= daily-limit u100)) ERR_MALFORMED_DATA)
+      
+      (map-set trust-operations
+        {operation-type: operation-type}
+        {
+          trust-multiplier: multiplier,
+          operation-description: description,
+          minimum-tier-requirement: tier-requirement,
+          maximum-daily-executions: daily-limit,
+          operational: operational
+        }
+      )
+      
+      (print {
+        governance-event: "operation-modified",
+        operation-type: operation-type,
+        new-multiplier: multiplier,
+        operational-status: operational
+      })
+      (ok true)
+    )
+  )
+)
+
+;;                           INTERNAL UTILITIES
+
+;; Validate identity ownership and operational status
+(define-private (validate-identity-authority (identity principal))
+  (match (map-get? trust-registry {identity: identity})
+    registry-entry
+      (and
+        (is-eq identity tx-sender)
+        (get active-status registry-entry)
+      )
+    false
+  )
+)
