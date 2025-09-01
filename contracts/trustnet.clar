@@ -377,3 +377,98 @@
 (define-private (requires-entropy-decay (last-checkpoint uint))
   (>= (- stacks-block-height last-checkpoint) (var-get decay-cycle-duration))
 )
+
+;;                        IDENTITY LIFECYCLE MANAGEMENT
+
+;; Establish new trust identity with Bitcoin-anchored registration
+(define-public (establish-trust-identity (unique-handle (string-ascii 64)))
+  (let
+    (
+      (registrant tx-sender)
+      (registration-height stacks-block-height)
+      (initial-trust (var-get bootstrap-trust-allocation))
+      (initial-tier (compute-trust-tier initial-trust))
+    )
+    (begin
+      (asserts! (var-get protocol-operational) ERR_PROTOCOL_OFFLINE)
+      (asserts! (is-none (map-get? trust-registry {identity: registrant})) ERR_IDENTITY_EXISTS)
+      (asserts! (>= (len unique-handle) MIN_IDENTITY_LENGTH) ERR_MALFORMED_DATA)
+      
+      (map-set trust-registry
+        {identity: registrant}
+        {
+          unique-handle: unique-handle,
+          trust-coefficient: initial-trust,
+          genesis-block: registration-height,
+          last-interaction: registration-height,
+          entropy-checkpoint: registration-height,
+          verified-operations: u0,
+          active-status: true,
+          trust-tier: initial-tier
+        }
+      )
+      
+      ;; Update protocol-wide statistics
+      (var-set total-registered-identities (+ (var-get total-registered-identities) u1))
+      (var-set global-trust-distribution (+ (var-get global-trust-distribution) initial-trust))
+      
+      ;; Initialize analytics entry
+      (map-set trust-analytics
+        {metric-name: "new-registrations"}
+        {
+          current-value: (var-get total-registered-identities),
+          historical-peak: registration-height,
+          last-updated: registration-height,
+          measurement-frequency: u1
+        }
+      )
+      
+      (print {
+        trust-event: "identity-established",
+        identity: registrant,
+        handle: unique-handle,
+        initial-trust: initial-trust,
+        trust-tier: initial-tier,
+        bitcoin-anchor: burn-block-height,
+        registration-id: registration-height
+      })
+      
+      (ok unique-handle)
+    )
+  )
+)
+
+;; Modify identity operational status with proper authorization
+(define-public (modify-identity-status (active-state bool))
+  (let
+    (
+      (identity tx-sender)
+      (current-registry
+        (unwrap!
+          (map-get? trust-registry {identity: identity})
+          ERR_IDENTITY_UNKNOWN
+        )
+      )
+    )
+    (begin
+      (asserts! (var-get protocol-operational) ERR_PROTOCOL_OFFLINE)
+      
+      (map-set trust-registry
+        {identity: identity}
+        (merge current-registry {
+          active-status: active-state,
+          last-interaction: stacks-block-height
+        })
+      )
+      
+      (print {
+        trust-event: "identity-status-modified",
+        identity: identity,
+        active: active-state,
+        timestamp: stacks-block-height
+      })
+      
+      (ok active-state)
+    )
+  )
+)
