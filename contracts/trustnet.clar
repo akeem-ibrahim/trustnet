@@ -793,3 +793,52 @@
 (define-read-only (get-protocol-analytics (metric-name (string-ascii 32)))
   (map-get? trust-analytics {metric-name: metric-name})
 )
+
+;; Get current protocol configuration and status
+(define-read-only (get-protocol-status)
+  {
+    operational: (var-get protocol-operational),
+    governance-authority: (var-get governance-authority),
+    protocol-revision: PROTOCOL_REVISION,
+    total-identities: (var-get total-registered-identities),
+    global-trust: (var-get global-trust-distribution),
+    entropy-decay-rate: (var-get entropy-decay-rate),
+    decay-cycle-duration: (var-get decay-cycle-duration),
+    current-height: stacks-block-height,
+    bitcoin-anchor: burn-block-height
+  }
+)
+
+;; Calculate trust score after simulated operation execution
+(define-read-only (simulate-trust-operation
+  (identity principal)
+  (operation-type (string-ascii 48))
+)
+  (match (map-get? trust-registry {identity: identity})
+    registry-entry
+      (let
+        (
+          (current-trust (get trust-coefficient registry-entry))
+          (current-tier (get trust-tier registry-entry))
+          (operation-multiplier (get-operation-trust-multiplier operation-type))
+          (trust-increment (* operation-multiplier (+ u1 (/ current-tier u10))))
+          (simulated-trust
+            (if (< (+ current-trust trust-increment) MAX_TRUST_SCORE)
+              (+ current-trust trust-increment)
+              MAX_TRUST_SCORE
+            )
+          )
+          (simulated-tier (compute-trust-tier simulated-trust))
+        )
+        (some {
+          current-trust: current-trust,
+          projected-trust: simulated-trust,
+          trust-increase: trust-increment,
+          current-tier: current-tier,
+          projected-tier: simulated-tier,
+          operation-accessible: (is-operation-accessible operation-type current-tier)
+        })
+      )
+    none
+  )
+)
