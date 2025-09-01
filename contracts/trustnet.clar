@@ -472,3 +472,123 @@
     )
   )
 )
+
+;;                           TRUST COEFFICIENT ENGINE
+
+;; Execute trust-earning operation with comprehensive validation and scoring
+(define-public (execute-trust-operation (operation-type (string-ascii 48)))
+  (let
+    (
+      (executor tx-sender)
+      (registry-entry
+        (unwrap!
+          (map-get? trust-registry {identity: executor})
+          ERR_IDENTITY_UNKNOWN
+        )
+      )
+      (current-trust (get trust-coefficient registry-entry))
+      (current-tier (get trust-tier registry-entry))
+      (operation-multiplier (get-operation-trust-multiplier operation-type))
+      (verified-count (+ (get verified-operations registry-entry) u1))
+    )
+    (begin
+      (asserts! (var-get protocol-operational) ERR_PROTOCOL_OFFLINE)
+      (asserts! (get active-status registry-entry) ERR_UNAUTHORIZED)
+      (asserts! (is-some (map-get? trust-operations {operation-type: operation-type})) ERR_OPERATION_UNKNOWN)
+      (asserts! (is-operation-accessible operation-type current-tier) ERR_TRUST_INSUFFICIENT)
+      
+      ;; Apply entropy decay if cycle completed
+      (if (requires-entropy-decay (get entropy-checkpoint registry-entry))
+        (execute-entropy-decay-internal executor)
+        true
+      )
+      
+      ;; Calculate updated trust coefficient with ceiling protection
+      (let
+        (
+          (refreshed-registry (unwrap! (map-get? trust-registry {identity: executor}) ERR_IDENTITY_UNKNOWN))
+          (decayed-trust (get trust-coefficient refreshed-registry))
+          (trust-increment (* operation-multiplier (+ u1 (/ current-tier u10))))
+          (updated-trust
+            (if (< (+ decayed-trust trust-increment) MAX_TRUST_SCORE)
+              (+ decayed-trust trust-increment)
+              MAX_TRUST_SCORE
+            )
+          )
+          (updated-tier (compute-trust-tier updated-trust))
+        )
+        (begin
+          (map-set trust-registry
+            {identity: executor}
+            (merge refreshed-registry {
+              trust-coefficient: updated-trust,
+              last-interaction: stacks-block-height,
+              verified-operations: verified-count,
+              trust-tier: updated-tier
+            })
+          )
+          
+          (record-trust-transition executor operation-type decayed-trust updated-trust u0)
+          
+          (ok updated-trust)
+        )
+      )
+    )
+  )
+)
+
+;; Internal entropy decay application with sophisticated algorithms
+(define-private (execute-entropy-decay-internal (identity principal))
+  (let
+    (
+      (registry-entry
+        (default-to
+          {
+            unique-handle: "",
+            trust-coefficient: u0,
+            genesis-block: u0,
+            last-interaction: u0,
+            entropy-checkpoint: u0,
+            verified-operations: u0,
+            active-status: false,
+            trust-tier: u0
+          }
+          (map-get? trust-registry {identity: identity})
+        )
+      )
+      (current-trust (get trust-coefficient registry-entry))
+      (decay-factor (var-get entropy-decay-rate))
+      ;; Non-linear decay - higher scores decay faster to prevent stagnation
+      (adjusted-decay (+ decay-factor (/ (get trust-tier registry-entry) u2)))
+      (decay-amount (/ (* current-trust adjusted-decay) u100))
+      (updated-trust
+        (if (> current-trust decay-amount)
+          (- current-trust decay-amount)
+          MIN_TRUST_SCORE
+        )
+      )
+      (updated-tier (compute-trust-tier updated-trust))
+    )
+    (begin
+      (map-set trust-registry
+        {identity: identity}
+        (merge registry-entry {
+          trust-coefficient: updated-trust,
+          last-interaction: stacks-block-height,
+          entropy-checkpoint: stacks-block-height,
+          trust-tier: updated-tier
+        })
+      )
+      
+      (record-trust-transition identity "entropy-decay" current-trust updated-trust u0)
+      
+      ;; Update global distribution
+      (var-set global-trust-distribution
+        (if (> (var-get global-trust-distribution) (- current-trust updated-trust))
+          (- (var-get global-trust-distribution) (- current-trust updated-trust))
+          u0))
+      
+      true
+    )
+  )
+)
